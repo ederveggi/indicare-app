@@ -1,7 +1,0 @@
-{
-  "version": 2,
-  "routes": [
-    { "src": "/api/claude", "dest": "/claude.js" },
-    { "src": "/(.*)", "dest": "/index.html" }
-  ]
-}
