@@ -35,9 +35,10 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'API Key não configurada no servidor.' });
 
   // ── Validação do body ─────────────────────────────────────────────────────
-  const { paciente, solicitante, contexto } = req.body || {};
+  const { paciente, solicitante, contexto, indicacaoClinica, historico } = req.body || {};
 
   if (!paciente || (!paciente.nome && !paciente.cpf && !paciente.carteira)) {
+    // indicacaoClinica é opcional — se não vier, IA usa só perfil do paciente
     return res.status(400).json({
       error: 'Dados do paciente obrigatórios (nome, cpf ou carteira).'
     });
@@ -45,7 +46,7 @@ export default async function handler(req, res) {
 
   // ── Monta system + message (mesmo contrato do claude.js) ─────────────────
   const system  = SYSTEM_PROMPT;
-  const message = montarPrompt(paciente, solicitante, contexto);
+  const message = montarPrompt(paciente, solicitante, contexto, indicacaoClinica, historico);
 
   // ── Chama Anthropic — fetch puro, igual ao claude.js ─────────────────────
   try {
@@ -143,29 +144,45 @@ SCHEMA DE RESPOSTA (JSON exato):
 // PROMPT — monta com dados reais do paciente lidos da página Unimed
 // ═══════════════════════════════════════════════════════════════════════════
 
-function montarPrompt(paciente, solicitante, contexto) {
-  const idade   = calcularIdade(paciente.nascimento);
-  const perfil  = idade != null
+function montarPrompt(paciente, solicitante, contexto, indicacaoClinica, historico) {
+  const idade  = calcularIdade(paciente.nascimento);
+  const perfil = idade != null
     ? `${idade} anos${idade >= 75 ? ' — Idoso >75a (atenção a contraindicações)' : idade < 18 ? ' — Pediátrico' : ''}`
     : 'Não informada';
+
+  const secaoHistorico = historico?.length > 0
+    ? `
+HISTÓRICO DE ATENDIMENTOS RECENTES (${historico.length} registros):
+` +
+      historico.slice(0, 8).map(h => `- ${h.data || ''}: ${h.descricao || h.tipo || h.raw || ''}`).join('
+')
+    : '';
+
+  const secaoIndicacao = indicacaoClinica
+    ? `
+INDICAÇÃO CLÍNICA DO MÉDICO:
+"${indicacaoClinica}"
+`
+    : '';
 
   return `SOLICITAÇÃO DE PROPEDÊUTICA — UNIMED CUIABÁ (ANS 34.208-4)
 
 PACIENTE:
-- Nome: ${paciente.nome       || 'Não informado'}
+- Nome: ${paciente.nome            || 'Não informado'}
 - Idade: ${perfil}
 - Nascimento: ${paciente.nascimento || 'Não informado'}
-- CNS: ${paciente.cns         || 'Não informado'}
-- Carteira: ${paciente.carteira || paciente.usuario || 'Não informado'}
+- CNS: ${paciente.cns              || 'Não informado'}
+- Carteira: ${paciente.carteira    || paciente.usuario || 'Não informado'}
 
 SOLICITANTE:
-- Médico: ${solicitante?.nome   || 'Não informado'}
-- Código: ${solicitante?.codigo || 'Não informado'}
+- Médico: ${solicitante?.nome      || 'Não informado'}
+- Código: ${solicitante?.codigo    || 'Não informado'}
 
 GUIA: ${contexto?.guia || 'Nova solicitação'}
-
-Sugira a propedêutica diagnóstica mais indicada para este paciente segundo ACR, SBREIM e CFM.
-Considere rastreamentos recomendados para a faixa etária e cobertura obrigatória ANS.
+${secaoIndicacao}${secaoHistorico}
+Sugira os exames de imagem mais indicados para este paciente segundo ACR, SBREIM e CFM.
+${indicacaoClinica ? 'Baseie-se principalmente na indicação clínica fornecida.' : 'Considere rastreamentos recomendados para a faixa etária.'}
+${historico?.length > 0 ? 'Use o histórico para evitar repetição de exames recentes desnecessários.' : ''}
 Responda SOMENTE com o JSON conforme o schema definido.`;
 }
 
