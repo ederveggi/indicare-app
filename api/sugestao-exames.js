@@ -187,6 +187,7 @@ function normalizar(s) {
     procedimentos:      (s.procedimentos      || []).slice(0, 5).map(p => ({
       codigo:         p.codigoTUSS  || p.codigo  || '',
       descricao:      p.descricao   || p.nome     || '',
+      justificativa:  p.justificativa             || '',
       ultimaExecucao: p.ultimaExecucao           || '',
     })),
     observacoes:        (s.observacoes        || '').substring(0, 500),
