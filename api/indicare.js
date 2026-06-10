@@ -1,7 +1,7 @@
 /**
  * IndiCare — API Principal (Vercel Serverless)
  * Rota: POST /api/indicare
- * Módulos: sugestao | validar
+ * Módulos: sugestao | validar | visao (lê screenshot da tela Flash do MV)
  * USA fetch nativo — sem dependência de @anthropic-ai/sdk
  */
 
@@ -35,11 +35,51 @@ Regras:
 - Códigos TUSS reais de exames de imagem (US, TC, RM, RX)
 - Se indicação insuficiente, procedimentos vazio e explique no justificativaGeral`;
 
+const SYSTEM_VISAO = `Você é um médico radiologista sênior e auditor clínico brasileiro analisando uma CAPTURA DE TELA de um prontuário eletrônico (MV PEP) de um hospital.
+
+TAREFA 1 — EXTRAIR da imagem:
+- Nome do paciente, idade, sexo, convênio
+- Queixa principal / motivo da consulta (campo S do SOAP)
+- Exame físico (campo O)
+- Hipóteses diagnósticas (campo A)
+- Conduta (campo P)
+- Evolução clínica se visível
+
+TAREFA 2 — SUGERIR exames de imagem indicados para o quadro.
+
+Responda APENAS com JSON válido neste formato exato (sem markdown):
+{
+  "success": true,
+  "dadosExtraidos": {
+    "nome": "nome do paciente se visível",
+    "idade": "idade",
+    "sexo": "sexo",
+    "indicacaoClinica": "resumo estruturado: queixa + exame físico + hipótese + conduta"
+  },
+  "sugestao": {
+    "procedimentos": [
+      {
+        "codigo": "40901033",
+        "descricao": "US - ABDOME TOTAL",
+        "linha": "primeira",
+        "justificativa": "Justificativa em 1 frase baseada no quadro lido"
+      }
+    ],
+    "cid": "CID-10 sugerido",
+    "justificativaGeral": "Raciocínio diagnóstico em 2-3 frases citando os achados da tela"
+  }
+}
+
+Regras:
+- Máximo 5 exames, linha: "primeira"|"segunda"|"terceira"
+- Códigos TUSS reais de exames de imagem
+- Se a tela não contém dados clínicos legíveis, retorne procedimentos vazio e explique`;
+
 const SYSTEM_VALIDAR = `Você é um médico auditor sênior de plano de saúde com expertise em medicina baseada em evidências e regulamentações da ANS.
 
 Avalie a coerência clínica entre os dados do paciente, a indicação e os procedimentos solicitados.
 
-Responda APENAS com JSON válido neste formato exato (sem markdown, sem texto fora do JSON):
+Responda APENAS com JSON válido neste formato exato (sem markdown):
 {
   "success": true,
   "decisao": "AUTORIZAR",
@@ -79,44 +119,71 @@ module.exports = async function handler(req, res) {
     indicacaoClinica = '',
     dadosClinicos = {},
     procedimentos = [],
+    imagemBase64 = '',
     contexto = {}
   } = req.body || {};
 
-  // Monta prompt do paciente
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ success: false, error: 'API key não configurada.' });
+  }
+
   const partesPac = [
-    paciente.nome        ? `Paciente: ${paciente.nome}` : '',
-    paciente.idade       ? `Idade: ${paciente.idade} anos` : '',
-    paciente.sexo        ? `Sexo: ${paciente.sexo}` : '',
-    paciente.convenio    ? `Convênio: ${paciente.convenio}` : '',
-    paciente.nascimento  ? `Nascimento: ${paciente.nascimento}` : '',
-    paciente.atendimento ? `Atendimento: ${paciente.atendimento}` : '',
+    paciente.nome     ? `Paciente: ${paciente.nome}` : '',
+    paciente.idade    ? `Idade: ${paciente.idade} anos` : '',
+    paciente.sexo     ? `Sexo: ${paciente.sexo}` : '',
+    paciente.convenio ? `Convênio: ${paciente.convenio}` : '',
   ].filter(Boolean).join('\n');
 
-  let userPrompt = '';
   let systemPrompt = '';
+  let messages = [];
 
-  if (modulo === 'sugestao') {
+  if (modulo === 'visao') {
+    if (!imagemBase64) {
+      return res.status(400).json({ success: false, error: 'imagemBase64 obrigatória no módulo visao.' });
+    }
+    systemPrompt = SYSTEM_VISAO;
+    messages = [{
+      role: 'user',
+      content: [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: 'image/jpeg',
+            data: imagemBase64
+          }
+        },
+        {
+          type: 'text',
+          text: `${partesPac ? 'Dados já conhecidos:\n' + partesPac + '\n\n' : ''}Analise esta tela do prontuário MV PEP. Extraia os dados clínicos visíveis (SOAP, hipóteses, conduta) e sugira os exames de imagem indicados.`
+        }
+      ]
+    }];
+
+  } else if (modulo === 'sugestao') {
     systemPrompt = SYSTEM_SUGESTAO;
     const dadosExtra = Object.keys(dadosClinicos).length > 0
       ? '\nDados clínicos adicionais:\n' + Object.entries(dadosClinicos)
           .filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join('\n')
       : '';
-    userPrompt = `${partesPac}\n\nIndicação clínica:\n${indicacaoClinica || 'Não informada'}${dadosExtra}\n\nSugira os exames de imagem mais indicados.`;
+    messages = [{
+      role: 'user',
+      content: `${partesPac}\n\nIndicação clínica:\n${indicacaoClinica || 'Não informada'}${dadosExtra}\n\nSugira os exames de imagem mais indicados.`
+    }];
 
   } else if (modulo === 'validar') {
     systemPrompt = SYSTEM_VALIDAR;
     const listaProcs = (procedimentos || []).map(p =>
       `- ${p.codigo || '?'}: ${p.descricao || p.nome || '?'}`
     ).join('\n');
-    userPrompt = `${partesPac}\n\nIndicação clínica:\n${indicacaoClinica || 'Não informada'}\n\nProcedimentos solicitados:\n${listaProcs || 'Nenhum informado'}\n\nAvalie a coerência clínica.`;
+    messages = [{
+      role: 'user',
+      content: `${partesPac}\n\nIndicação clínica:\n${indicacaoClinica || 'Não informada'}\n\nProcedimentos solicitados:\n${listaProcs || 'Nenhum informado'}\n\nAvalie a coerência clínica.`
+    }];
 
   } else {
     return res.status(400).json({ success: false, error: `Módulo desconhecido: ${modulo}` });
-  }
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ success: false, error: 'API key não configurada.' });
   }
 
   try {
@@ -129,15 +196,15 @@ module.exports = async function handler(req, res) {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2000,
+        max_tokens: 2500,
         system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }]
+        messages: messages
       })
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error('Anthropic error:', errText);
+      console.error('Anthropic error:', errText.substring(0, 300));
       return res.status(500).json({ success: false, error: `Erro Anthropic: ${response.status}` });
     }
 
@@ -149,7 +216,7 @@ module.exports = async function handler(req, res) {
       const clean = textoResposta.replace(/```json|```/g, '').trim();
       resultado = JSON.parse(clean);
     } catch(e) {
-      console.error('Parse JSON error:', textoResposta.substring(0, 200));
+      console.error('Parse error:', textoResposta.substring(0, 200));
       return res.status(200).json({
         success: false,
         error: 'Erro ao processar resposta da IA.',
