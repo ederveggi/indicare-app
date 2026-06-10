@@ -6,7 +6,7 @@
  */
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-3-5-sonnet-20241022';
+const MODEL = 'claude-sonnet-4-6';
 
 const SYSTEM_SUGESTAO = `Você é um médico radiologista sênior e auditor clínico especialista em saúde suplementar brasileira, com 15 anos de experiência em propedêutica diagnóstica por imagem.
 
