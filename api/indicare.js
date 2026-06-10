@@ -2,9 +2,11 @@
  * IndiCare — API Principal (Vercel Serverless)
  * Rota: POST /api/indicare
  * Módulos: sugestao | validar
+ * USA fetch nativo — sem dependência de @anthropic-ai/sdk
  */
 
-const Anthropic = require('@anthropic-ai/sdk');
+const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
+const MODEL = 'claude-3-5-sonnet-20241022';
 
 const SYSTEM_SUGESTAO = `Você é um médico radiologista sênior e auditor clínico especialista em saúde suplementar brasileira, com 15 anos de experiência em propedêutica diagnóstica por imagem.
 
@@ -16,24 +18,24 @@ Responda APENAS com JSON válido neste formato exato (sem markdown, sem texto fo
   "sugestao": {
     "procedimentos": [
       {
-        "codigo": "TUSS_CODE",
-        "descricao": "Nome completo do exame",
+        "codigo": "40901033",
+        "descricao": "US - ABDOME TOTAL",
         "linha": "primeira",
         "justificativa": "Justificativa clínica em 1 frase"
       }
     ],
-    "cid": "CID sugerido se aplicável",
-    "justificativaGeral": "Raciocínio diagnóstico geral em 2-3 frases"
+    "cid": "CID sugerido",
+    "justificativaGeral": "Raciocínio diagnóstico em 2-3 frases"
   }
 }
 
 Regras:
-- Máximo 5 exames, ordenados por prioridade clínica
+- Máximo 5 exames ordenados por prioridade
 - linha: "primeira", "segunda" ou "terceira"
-- Códigos TUSS reais de exames de imagem (US, RX, TC, RM)
-- Se não houver indicação clínica suficiente, retorne procedimentos vazio e explique no justificativaGeral`;
+- Códigos TUSS reais de exames de imagem (US, TC, RM, RX)
+- Se indicação insuficiente, procedimentos vazio e explique no justificativaGeral`;
 
-const SYSTEM_VALIDAR = `Você é um médico auditor sênior de plano de saúde com experiência em medicina baseada em evidências e regulamentações da ANS.
+const SYSTEM_VALIDAR = `Você é um médico auditor sênior de plano de saúde com expertise em medicina baseada em evidências e regulamentações da ANS.
 
 Avalie a coerência clínica entre os dados do paciente, a indicação e os procedimentos solicitados.
 
@@ -45,32 +47,28 @@ Responda APENAS com JSON válido neste formato exato (sem markdown, sem texto fo
   "validacao": {
     "itens": [
       {
-        "codigo": "codigo_do_exame",
+        "codigo": "codigo",
         "descricao": "Nome do exame",
         "nivel": "adequado",
-        "justificativa": "Justificativa da avaliação"
+        "justificativa": "Justificativa"
       }
     ],
-    "recomendacao": "Texto com recomendação geral do auditor"
+    "recomendacao": "Recomendação geral do auditor"
   },
-  "parecer": "Parecer técnico completo para registro"
+  "parecer": "Parecer técnico completo"
 }
 
 Regras:
 - decisao: AUTORIZAR | AUTORIZAR COM RESSALVA | SOLICITAR COMPLEMENTAÇÃO | DEVOLVER/GLOSAR
-- score: 0-100 (coerência clínica)
-- nivel dos itens: "adequado" | "discutivel" | "nao-indicado"`;
+- score: 0-100
+- nivel: "adequado" | "discutivel" | "nao-indicado"`;
 
 module.exports = async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
+  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Método não permitido.' });
   }
@@ -81,12 +79,11 @@ module.exports = async function handler(req, res) {
     indicacaoClinica = '',
     dadosClinicos = {},
     procedimentos = [],
-    historico = [],
     contexto = {}
   } = req.body || {};
 
-  // Monta contexto clínico para o prompt
-  const partesPaciente = [
+  // Monta prompt do paciente
+  const partesPac = [
     paciente.nome        ? `Paciente: ${paciente.nome}` : '',
     paciente.idade       ? `Idade: ${paciente.idade} anos` : '',
     paciente.sexo        ? `Sexo: ${paciente.sexo}` : '',
@@ -96,70 +93,74 @@ module.exports = async function handler(req, res) {
   ].filter(Boolean).join('\n');
 
   let userPrompt = '';
+  let systemPrompt = '';
 
   if (modulo === 'sugestao') {
-    userPrompt = `${partesPaciente}
-
-Indicação clínica / dados da tela:
-${indicacaoClinica || 'Não informada'}
-
-${Object.keys(dadosClinicos).length > 0 ?
-  'Dados clínicos adicionais:\n' + Object.entries(dadosClinicos)
-    .filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join('\n') : ''}
-
-Sugira os exames de imagem mais indicados para este caso.`;
+    systemPrompt = SYSTEM_SUGESTAO;
+    const dadosExtra = Object.keys(dadosClinicos).length > 0
+      ? '\nDados clínicos adicionais:\n' + Object.entries(dadosClinicos)
+          .filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join('\n')
+      : '';
+    userPrompt = `${partesPac}\n\nIndicação clínica:\n${indicacaoClinica || 'Não informada'}${dadosExtra}\n\nSugira os exames de imagem mais indicados.`;
 
   } else if (modulo === 'validar') {
-    const listaProcs = procedimentos.map(p =>
+    systemPrompt = SYSTEM_VALIDAR;
+    const listaProcs = (procedimentos || []).map(p =>
       `- ${p.codigo || '?'}: ${p.descricao || p.nome || '?'}`
     ).join('\n');
+    userPrompt = `${partesPac}\n\nIndicação clínica:\n${indicacaoClinica || 'Não informada'}\n\nProcedimentos solicitados:\n${listaProcs || 'Nenhum informado'}\n\nAvalie a coerência clínica.`;
 
-    userPrompt = `${partesPaciente}
-
-Indicação clínica:
-${indicacaoClinica || 'Não informada'}
-
-Procedimentos solicitados:
-${listaProcs || 'Nenhum procedimento informado'}
-
-Avalie a coerência clínica e emita o parecer de autorização.`;
   } else {
     return res.status(400).json({ success: false, error: `Módulo desconhecido: ${modulo}` });
   }
 
-  try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ success: false, error: 'API key não configurada.' });
+  }
 
-    const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 2000,
-      system: modulo === 'sugestao' ? SYSTEM_SUGESTAO : SYSTEM_VALIDAR,
-      messages: [{ role: 'user', content: userPrompt }]
+  try {
+    const response = await fetch(ANTHROPIC_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 2000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
     });
 
-    const textoResposta = response.content[0]?.text || '';
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Anthropic error:', errText);
+      return res.status(500).json({ success: false, error: `Erro Anthropic: ${response.status}` });
+    }
 
-    // Parse JSON da resposta
-    let dados;
+    const data = await response.json();
+    const textoResposta = data.content?.[0]?.text || '';
+
+    let resultado;
     try {
       const clean = textoResposta.replace(/```json|```/g, '').trim();
-      dados = JSON.parse(clean);
+      resultado = JSON.parse(clean);
     } catch(e) {
-      console.error('Erro parse JSON:', textoResposta.substring(0, 200));
+      console.error('Parse JSON error:', textoResposta.substring(0, 200));
       return res.status(200).json({
         success: false,
         error: 'Erro ao processar resposta da IA.',
-        raw: textoResposta.substring(0, 500)
+        raw: textoResposta.substring(0, 300)
       });
     }
 
-    return res.status(200).json(dados);
+    return res.status(200).json(resultado);
 
   } catch(err) {
-    console.error('Erro Anthropic:', err.message);
-    return res.status(500).json({
-      success: false,
-      error: 'Erro ao consultar IA: ' + err.message
-    });
+    console.error('Handler error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
