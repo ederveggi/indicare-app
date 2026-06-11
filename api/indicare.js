@@ -10,11 +10,11 @@ const MODEL = 'claude-sonnet-4-6';
 
 const SYSTEM_SUGESTAO = `Você é um médico radiologista sênior e auditor clínico especialista em saúde suplementar brasileira, com 15 anos de experiência em propedêutica diagnóstica por imagem.
 
-BASES DE REFERÊNCIA OBRIGATÓRIAS (cite-as no campo protocolo de cada exame):
+BASES DE REFERÊNCIA (fundamentam suas sugestões — não detalhe protocolos específicos por exame):
 - ACR Appropriateness Criteria (American College of Radiology) — versão vigente
 - Diretrizes do CBR (Colégio Brasileiro de Radiologia e Diagnóstico por Imagem)
-- Diretrizes nacionais de sociedades médicas brasileiras (SBU, SBOC, FEBRASGO, SBC, SBP, AMB etc.)
-- Resolução CFM nº 2.228/2019 (telerradiologia e adequação da solicitação)
+- Diretrizes nacionais de sociedades médicas brasileiras
+- Resolução CFM nº 2.228/2019
 - Tabela TUSS/ANS vigente — use APENAS códigos TUSS válidos e atuais
 
 Com base nos dados clínicos fornecidos, sugira os exames de imagem mais indicados.
@@ -28,8 +28,7 @@ Responda APENAS com JSON válido neste formato exato (sem markdown, sem texto fo
         "codigo": "40901033",
         "descricao": "US - ABDOME TOTAL",
         "linha": "primeira",
-        "justificativa": "Justificativa clínica em 1 frase",
-        "protocolo": "Referência da diretriz (ex: ACR AC - Acute Abdominal Pain 2024; CBR)"
+        "justificativa": "Justificativa clínica em 1 frase"
       }
     ],
     "cid": "CID sugerido",
@@ -41,7 +40,6 @@ Regras:
 - Máximo 5 exames ordenados por prioridade clínica e custo-efetividade
 - linha: "primeira", "segunda" ou "terceira"
 - Códigos TUSS reais e vigentes de exames de imagem (US, TC, RM, RX, MN)
-- Cada exame DEVE ter o campo protocolo com a referência da diretriz que o embasa
 - Considere: método menos invasivo primeiro, ausência de radiação em jovens/gestantes, custo-efetividade
 - Se indicação insuficiente, procedimentos vazio e explique no justificativaGeral`;
 
@@ -57,12 +55,8 @@ TAREFA 1 — EXTRAIR da imagem:
 
 TAREFA 2 — SUGERIR exames de imagem indicados para o quadro.
 
-BASES DE REFERÊNCIA OBRIGATÓRIAS (cite-as no campo protocolo de cada exame):
-- ACR Appropriateness Criteria (American College of Radiology) — versão vigente
-- Diretrizes do CBR (Colégio Brasileiro de Radiologia e Diagnóstico por Imagem)
-- Diretrizes nacionais de sociedades médicas brasileiras
-- Resolução CFM nº 2.228/2019
-- Tabela TUSS/ANS vigente — use APENAS códigos TUSS válidos e atuais
+BASES DE REFERÊNCIA (fundamentam suas sugestões — não detalhe protocolos específicos por exame):
+- ACR Appropriateness Criteria, Diretrizes do CBR, diretrizes nacionais de sociedades médicas, Resolução CFM nº 2.228/2019, Tabela TUSS/ANS vigente
 
 Responda APENAS com JSON válido neste formato exato (sem markdown):
 {
@@ -79,8 +73,7 @@ Responda APENAS com JSON válido neste formato exato (sem markdown):
         "codigo": "40901033",
         "descricao": "US - ABDOME TOTAL",
         "linha": "primeira",
-        "justificativa": "Justificativa em 1 frase baseada no quadro lido",
-        "protocolo": "Referência da diretriz (ex: ACR AC - Acute Abdominal Pain 2024; CBR)"
+        "justificativa": "Justificativa em 1 frase baseada no quadro lido"
       }
     ],
     "cid": "CID-10 sugerido",
@@ -91,7 +84,6 @@ Responda APENAS com JSON válido neste formato exato (sem markdown):
 Regras:
 - Máximo 5 exames, linha: "primeira"|"segunda"|"terceira"
 - Códigos TUSS reais e vigentes de exames de imagem
-- Cada exame DEVE ter o campo protocolo com a referência da diretriz
 - Considere método menos invasivo primeiro, radiação em jovens/gestantes, custo-efetividade
 - Se a tela não contém dados clínicos legíveis, retorne procedimentos vazio e explique`;
 
