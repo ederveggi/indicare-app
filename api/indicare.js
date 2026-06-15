@@ -72,15 +72,18 @@ Responda APENAS com JSON válido neste formato exato (sem markdown):
   "sugestao": {
     "raciocinioClinico": "Texto em 3-5 frases: (1) síntese do quadro lido na tela; (2) análise de SE HÁ OU NÃO indicação de estudo por imagem e por quê; (3) estratégia propedêutica recomendada; (4) finalize citando as referências: ex. 'Fundamentação: ACR Appropriateness Criteria, Diretrizes CBR e diretrizes nacionais aplicáveis.'",
     "indicacaoImagem": true,
+    "cid": "CID-10 sugerido",
+    "caraterAtendimento": "Eletiva",
+    "tipoAtendimento": "Exame ambulatorial",
     "procedimentos": [
       {
         "codigo": "40901033",
         "descricao": "US - ABDOME TOTAL",
         "linha": "primeira",
-        "justificativa": "Justificativa clara e objetiva em 1-2 frases, redigida como argumento técnico utilizável no processo de autorização do exame."
+        "justificativa": "Justificativa clara e objetiva em 1-2 frases, redigida como argumento técnico utilizável no processo de autorização do exame.",
+        "protocolo": "Referência principal (ex: ACR AC - Acute Abdominal Pain 2022)"
       }
     ],
-    "cid": "CID-10 sugerido",
     "justificativaGeral": "copie aqui o mesmo texto de raciocinioClinico"
   }
 }
