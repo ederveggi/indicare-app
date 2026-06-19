@@ -3,10 +3,107 @@
  * Rota: POST /api/indicare
  * Módulos: sugestao | validar | visao (lê screenshot da tela Flash do MV)
  * USA fetch nativo — sem dependência de @anthropic-ai/sdk
+ *
+ * v2.0 — 2ª barreira de anonimização (LGPD / defesa em profundidade):
+ *  - Sanitização de entrada: PII descartada antes de montar o prompt.
+ *  - Prompt envia apenas idade e sexo — nunca nome/convênio/identificadores.
+ *  - Módulo VISÃO: a IA é instruída a NÃO extrair nem devolver identificadores
+ *    visíveis na imagem (nome, carteira, CPF, CNS...). dadosExtraidos sem nome.
  */
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-6';
+
+/* ════════════════════════════════════════════════════════════════
+ * 2ª BARREIRA — Sanitização de entrada (servidor)
+ * ════════════════════════════════════════════════════════════════ */
+
+function calcularIdade(nascimento) {
+  if (!nascimento) return null;
+  const p = String(nascimento).split('/');
+  if (p.length !== 3) return null;
+  const nasc = new Date(`${p[2]}-${p[1]}-${p[0]}`);
+  if (isNaN(nasc)) return null;
+  const hoje = new Date();
+  let idade = hoje.getFullYear() - nasc.getFullYear();
+  const m = hoje.getMonth() - nasc.getMonth();
+  if (m < 0 || (m === 0 && hoje.getDate() < nasc.getDate())) idade--;
+  if (idade < 0 || idade > 130) return null;
+  return idade;
+}
+
+function scrubTexto(texto) {
+  if (typeof texto !== 'string' || !texto) return '';
+  let t = texto;
+  t = t.replace(/(\b(?:data\s+de\s+nascimento|nascimento|dn|d\.n\.)\s*[:\-]\s*)(\d{2}\/\d{2}\/\d{4})/gi,
+    (full, pre, data) => {
+      const id = calcularIdade(data);
+      return id != null ? `Idade: ${id} anos` : `${pre}[DATA_NASCIMENTO]`;
+    });
+  const rotulos = [
+    ['nome do paciente', '[PACIENTE]'], ['nome da mãe', '[NOME_MAE]'],
+    ['nome da mae', '[NOME_MAE]'], ['paciente', '[PACIENTE]'],
+    ['beneficiário', '[BENEFICIARIO]'], ['beneficiario', '[BENEFICIARIO]'],
+    ['carteirinha', '[CARTEIRINHA]'], ['carteira', '[CARTEIRINHA]'],
+    ['matrícula', '[MATRICULA]'], ['matricula', '[MATRICULA]'],
+    ['rg', '[RG]'], ['endereço', '[ENDERECO]'], ['endereco', '[ENDERECO]'],
+    ['nome', '[NOME]'],
+  ];
+  for (const [chave, rot] of rotulos) {
+    const esc = chave.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(\\b' + esc + '\\s*[:\\-]\\s*)(?!\\[)([^\\n\\r,.;]+)', 'gi');
+    t = t.replace(re, (full, pre) => pre + rot);
+  }
+  const padroes = [
+    [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[EMAIL]'],
+    [/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '[CPF]'],
+    [/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '[CNPJ]'],
+    [/\b\d{3}\s?\d{4}\s?\d{4}\s?\d{4}\b/g, '[CARTAO_SUS]'],
+    [/(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?\d?\s?\d{4}[-\s]?\d{4}\b/g, '[TELEFONE]'],
+    [/\b\d{5}-?\d{3}\b/g, '[CEP]'],
+    [/\b\d{2}\/\d{2}\/\d{4}\b/g, '[DATA]'],
+  ];
+  for (const [re, rot] of padroes) t = t.replace(re, rot);
+  return t.replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+function sanitizarPaciente(pac) {
+  pac = pac || {};
+  const out = {};
+  let idade = pac.idade;
+  if ((idade === undefined || idade === null || idade === '') && pac.nascimento) {
+    const c = calcularIdade(pac.nascimento);
+    if (c != null) idade = c;
+  }
+  if (idade !== undefined && idade !== null && idade !== '') {
+    const n = parseInt(String(idade).replace(/[^\d]/g, ''), 10);
+    if (!isNaN(n)) out.idade = n;
+  }
+  if (pac.sexo) out.sexo = String(pac.sexo).substring(0, 20);
+  return out;
+}
+
+function sanitizarDadosClinicos(dc) {
+  if (!dc || typeof dc !== 'object') return {};
+  const out = {};
+  for (const k of Object.keys(dc)) {
+    const v = dc[k];
+    out[k] = (typeof v === 'string') ? scrubTexto(v) : v;
+  }
+  return out;
+}
+
+function sanitizarProcedimentos(procs) {
+  if (!Array.isArray(procs)) return [];
+  return procs.slice(0, 10).map(p => ({
+    codigo: (p && (p.codigo || p.codigoTUSS)) ? String(p.codigo || p.codigoTUSS).substring(0, 20) : '?',
+    descricao: scrubTexto((p && (p.descricao || p.nome)) || ''),
+  }));
+}
+
+/* ════════════════════════════════════════════════════════════════
+ * SYSTEM PROMPTS
+ * ════════════════════════════════════════════════════════════════ */
 
 const SYSTEM_SUGESTAO = `Você é um médico radiologista sênior e auditor clínico especialista em saúde suplementar brasileira, com 15 anos de experiência em propedêutica diagnóstica por imagem.
 
@@ -48,8 +145,13 @@ Regras:
 
 const SYSTEM_VISAO = `Você é um médico radiologista sênior e auditor clínico brasileiro analisando uma CAPTURA DE TELA de um prontuário eletrônico (MV PEP) de um hospital.
 
-TAREFA 1 — EXTRAIR da imagem:
-- Nome do paciente, idade, sexo, convênio
+⚠️ LGPD — PROTEÇÃO DE DADOS PESSOAIS (REGRA OBRIGATÓRIA E PRIORITÁRIA):
+- NÃO extraia, NÃO transcreva e NÃO inclua na sua resposta o NOME do paciente, carteirinha, CPF, CNS, RG, telefone, endereço, número de atendimento/guia ou QUALQUER identificador direto — mesmo que estejam claramente visíveis na imagem.
+- Use SOMENTE idade, sexo e os dados estritamente CLÍNICOS necessários ao raciocínio.
+- Ao resumir a indicação clínica, refira-se sempre como "o paciente"; nunca reproduza nomes próprios.
+
+TAREFA 1 — EXTRAIR da imagem (APENAS dado clínico, sem identificadores):
+- Idade e sexo (se visíveis)
 - Queixa principal / motivo da consulta (campo S do SOAP)
 - Exame físico (campo O)
 - Hipóteses diagnósticas (campo A)
@@ -64,10 +166,9 @@ Responda APENAS com JSON válido neste formato exato (sem markdown):
 {
   "success": true,
   "dadosExtraidos": {
-    "nome": "nome do paciente se visível",
-    "idade": "idade",
-    "sexo": "sexo",
-    "indicacaoClinica": "resumo estruturado: queixa + exame físico + hipótese + conduta"
+    "idade": "idade se visível",
+    "sexo": "sexo se visível",
+    "indicacaoClinica": "resumo estruturado: queixa + exame físico + hipótese + conduta — SEM nomes próprios ou identificadores"
   },
   "sugestao": {
     "raciocinioClinico": "Texto em 3-5 frases: (1) síntese do quadro lido na tela; (2) análise de SE HÁ OU NÃO indicação de estudo por imagem e por quê; (3) estratégia propedêutica recomendada; (4) finalize citando as referências: ex. 'Fundamentação: ACR Appropriateness Criteria, Diretrizes CBR e diretrizes nacionais aplicáveis.'",
@@ -137,26 +238,25 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ success: false, error: 'Método não permitido.' });
   }
 
-  const {
-    modulo = 'sugestao',
-    paciente = {},
-    indicacaoClinica = '',
-    dadosClinicos = {},
-    procedimentos = [],
-    imagemBase64 = '',
-    contexto = {}
-  } = req.body || {};
+  const body = req.body || {};
+  const modulo = body.modulo || 'sugestao';
+
+  // ── 2ª BARREIRA: sanitiza TUDO que chega antes de qualquer uso ──
+  const paciente        = sanitizarPaciente(body.paciente);
+  const indicacaoClinica = scrubTexto(body.indicacaoClinica || '');
+  const dadosClinicos   = sanitizarDadosClinicos(body.dadosClinicos);
+  const procedimentos   = sanitizarProcedimentos(body.procedimentos);
+  const imagemBase64    = body.imagemBase64 || '';
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ success: false, error: 'API key não configurada.' });
   }
 
+  // partesPac — SEM nome e SEM convênio (apenas idade/sexo)
   const partesPac = [
-    paciente.nome     ? `Paciente: ${paciente.nome}` : '',
-    paciente.idade    ? `Idade: ${paciente.idade} anos` : '',
-    paciente.sexo     ? `Sexo: ${paciente.sexo}` : '',
-    paciente.convenio ? `Convênio: ${paciente.convenio}` : '',
+    paciente.idade != null ? `Idade: ${paciente.idade} anos` : '',
+    paciente.sexo          ? `Sexo: ${paciente.sexo}` : '',
   ].filter(Boolean).join('\n');
 
   let systemPrompt = '';
@@ -180,7 +280,7 @@ module.exports = async function handler(req, res) {
         },
         {
           type: 'text',
-          text: `${partesPac ? 'Dados já conhecidos:\n' + partesPac + '\n\n' : ''}Analise esta tela do prontuário MV PEP. Extraia os dados clínicos visíveis (SOAP, hipóteses, conduta) e sugira os exames de imagem indicados.`
+          text: `${partesPac ? 'Dados clínicos já conhecidos:\n' + partesPac + '\n\n' : ''}Analise esta tela do prontuário MV PEP. Extraia APENAS os dados CLÍNICOS visíveis (SOAP, hipóteses, conduta) e sugira os exames de imagem indicados. LEMBRETE LGPD: não transcreva nome, carteira, CPF ou qualquer identificador do paciente.`
         }
       ]
     }];
@@ -199,7 +299,7 @@ module.exports = async function handler(req, res) {
   } else if (modulo === 'validar') {
     systemPrompt = SYSTEM_VALIDAR;
     const listaProcs = (procedimentos || []).map(p =>
-      `- ${p.codigo || '?'}: ${p.descricao || p.nome || '?'}`
+      `- ${p.codigo || '?'}: ${p.descricao || '?'}`
     ).join('\n');
     messages = [{
       role: 'user',
@@ -246,6 +346,15 @@ module.exports = async function handler(req, res) {
         error: 'Erro ao processar resposta da IA.',
         raw: textoResposta.substring(0, 300)
       });
+    }
+
+    // Salvaguarda extra: se a IA devolver nome em dadosExtraidos, remove.
+    if (resultado && resultado.dadosExtraidos && typeof resultado.dadosExtraidos === 'object') {
+      delete resultado.dadosExtraidos.nome;
+      delete resultado.dadosExtraidos.carteira;
+      delete resultado.dadosExtraidos.cpf;
+      delete resultado.dadosExtraidos.cns;
+      delete resultado.dadosExtraidos.convenio;
     }
 
     return res.status(200).json(resultado);
