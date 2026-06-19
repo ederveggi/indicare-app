@@ -989,6 +989,54 @@ select option { background: var(--bg3); }
 // ─── API KEY ──────────────────────────────
 // API Key gerenciada pelo servidor — sem exposição ao cliente
 
+   /* ===== IndiCare — Anonimização (1ª barreira) — ES5 ===== */
+(function (global) {
+  'use strict';
+  var PADROES = [
+    { re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, rot: '[EMAIL]' },
+    { re: /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, rot: '[CPF]' },
+    { re: /\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, rot: '[CNPJ]' },
+    { re: /\b\d{3}\s?\d{4}\s?\d{4}\s?\d{4}\b/g, rot: '[CARTAO_SUS]' },
+    { re: /(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?\d?\s?\d{4}[-\s]?\d{4}\b/g, rot: '[TELEFONE]' },
+    { re: /\b\d{5}-?\d{3}\b/g, rot: '[CEP]' },
+    { re: /\b\d{2}\/\d{2}\/\d{4}\b/g, rot: '[DATA]' }
+  ];
+  var ROTULOS = [
+    ['nome do paciente', '[PACIENTE]'], ['nome da mãe', '[NOME_MAE]'],
+    ['nome da mae', '[NOME_MAE]'], ['paciente', '[PACIENTE]'],
+    ['beneficiário', '[BENEFICIARIO]'], ['beneficiario', '[BENEFICIARIO]'],
+    ['carteirinha', '[CARTEIRINHA]'], ['carteira', '[CARTEIRINHA]'],
+    ['matrícula', '[MATRICULA]'], ['matricula', '[MATRICULA]'],
+    ['rg', '[RG]'], ['endereço', '[ENDERECO]'], ['endereco', '[ENDERECO]'],
+    ['nome', '[NOME]']
+  ];
+  function calcularIdade(d) {
+    if (!d) return null;
+    var m = String(d).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m) return null;
+    var dia = parseInt(m[1], 10), mes = parseInt(m[2], 10) - 1, ano = parseInt(m[3], 10);
+    var n = new Date(ano, mes, dia);
+    if (isNaN(n.getTime())) return null;
+    var h = new Date(), i = h.getFullYear() - ano;
+    if (!((h.getMonth() > mes) || (h.getMonth() === mes && h.getDate() >= dia))) i--;
+    return (i < 0 || i > 130) ? null : i;
+  }
+  function anonimizarTexto(texto) {
+    if (typeof texto !== 'string' || !texto) return '';
+    var t = texto;
+    t = t.replace(/(\b(?:data\s+de\s+nascimento|nascimento|dn|d\.n\.)\s*[:\-]\s*)(\d{2}\/\d{2}\/\d{4})/gi,
+      function (f, pre, data) { var id = calcularIdade(data); return id != null ? ('Idade: ' + id + ' anos') : (pre + '[DATA_NASCIMENTO]'); });
+    for (var i = 0; i < ROTULOS.length; i++) {
+      var esc = ROTULOS[i][0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      var re = new RegExp('(\\b' + esc + '\\s*[:\\-]\\s*)(?!\\[)([^\\n\\r,.;]+)', 'gi');
+      t = t.replace(re, (function (rot) { return function (f, pre) { return pre + rot; }; })(ROTULOS[i][1]));
+    }
+    for (var j = 0; j < PADROES.length; j++) t = t.replace(PADROES[j].re, PADROES[j].rot);
+    return t.replace(/[ \t]{2,}/g, ' ').replace(/^\s+|\s+$/g, '');
+  }
+  global.IndiCareAnon = { anonimizarTexto: anonimizarTexto, calcularIdade: calcularIdade };
+})(window);
+
 function init() {
   updateApiStatus(true); // Servidor sempre ativo
   renderNomen();
@@ -1043,7 +1091,10 @@ function getChips(groupId) {
 // ─── CALL SERVIDOR PROXY ─────────────────
 // A API Key fica no servidor Vercel — segura, invisível para o usuário
 async function callClaude(systemPrompt, userMessage, imageBase64 = null, imageMime = 'image/jpeg') {
-  const body = { system: systemPrompt, message: userMessage, max_tokens: 1500 };
+  // 1ª barreira (LGPD): mascara PII estruturada no texto antes de enviar
+  const msgLimpa = (window.IndiCareAnon && IndiCareAnon.anonimizarTexto)
+                   ? IndiCareAnon.anonimizarTexto(userMessage) : userMessage;
+  const body = { system: systemPrompt, message: msgLimpa, max_tokens: 1500 };
   if (imageBase64 && imageBase64.length > 100) {
     body.image_base64 = imageBase64;
     body.image_mime = imageMime;
@@ -1086,44 +1137,64 @@ function extractCodes(text) {
 }
 
 // ─── SUGERIR EXAME ────────────────────────
-const SYSTEM_SUGESTAO = `Você é o assistente clínico da plataforma IndiCare, especializado em propedêutica diagnóstica por imagem no Brasil, com expertise nas tabelas TUSS e SIGTAP.
+const SYSTEM_VALIDACAO = "Voce e um auditor medico especializado da plataforma IndiCare. " +
+"Analise pedidos medicos brasileiros (APAC/SUS, guias de convenios, receituarios). " +
 
-## SUA TAREFA
-Com base nos achados clínicos e suspeita diagnóstica informados, indique o(s) exame(s) de imagem mais adequado(s).
+"\n\n=== LGPD - PROTECAO DE DADOS (REGRA PRIORITARIA E OBRIGATORIA) ===" +
+"\nNAO extraia, NAO transcreva e NAO inclua na resposta: nome do paciente, nome da mae, " +
+"nome do medico solicitante, carteirinha, CPF, CNS, RG, telefone, endereco, data de nascimento " +
+"ou qualquer identificador direto — MESMO que visiveis na imagem. Use apenas idade, sexo e dados clinicos." +
 
-## BASE DE CONHECIMENTO
-- ACR Appropriateness Criteria — versão vigente
-- Diretrizes do CBR (Colégio Brasileiro de Radiologia)
-- Diretrizes nacionais de sociedades médicas
-- Resolução CFM nº 2.228/2019
-- Tabela TUSS/ANS vigente (convênios privados)
-- Tabela SIGTAP (SUS/SISREG)
+"\n\n=== REGRAS ABSOLUTAS DE LEITURA ===" +
 
-## REGRAS
-1. Indique em ordem de prioridade: 1ª linha, 2ª linha (se necessário)
-2. Para cada exame informe OBRIGATORIAMENTE o código TUSS e SIGTAP
-3. Justifique com base nas referências da base de conhecimento (ACR Appropriateness Criteria, Diretrizes CBR, diretrizes nacionais de sociedades médicas, CFM Res. 2.228/2019)
-4. ⚠️ Alerte sobre contraindicações relevantes:
-   - Gestante → evitar radiação, preferir US ou RM
-   - Alergia ao iodo → evitar TC com contraste
-   - IRC (Cr > 1,5) → cuidado com contraste iodado e gadolíneo
-   - Marcapasso → contraindicação à RM
-   - Claustrofobia → considerar RM aberta ou sedação
-5. 🔴 Se houver sinais de alarme (red flags), sinalizar urgência
-6. Máximo 3 exames por resposta
+"\nREGRA 1 - DOCUMENTO PRINCIPAL:" +
+"\nFoque APENAS no documento mais nitido e completo na imagem." +
+"\nSe houver outros documentos sobrepostos ou ao fundo, IGNORE-OS completamente." +
 
-## FORMATO OBRIGATÓRIO:
+"\nREGRA 2 - NOME DO EXAME (CRITICA):" +
+"\nLeia o campo 'Nome do Procedimento' ou 'Procedimento Solicitado' EXATAMENTE como escrito." +
+"\nNUNCA interprete o codigo do procedimento para definir o nome do exame." +
+"\n  - 'TOMOGRAFIA COMPUTADORIZADA' = TC (NAO e RM, NAO e RX, NAO e US)" +
+"\n  - 'RESSONANCIA MAGNETICA' = RM (NAO e TC)" +
+"\n  - 'ULTRASSONOGRAFIA' = US" +
+"\n  - 'RADIOGRAFIA' = RX" +
 
-🩻 **EXAME RECOMENDADO — 1ª LINHA:**
-**[Nome completo do exame]**
-- Justificativa: [baseada em guideline específico]
-- TUSS: [código] | SIGTAP: [código]
-- Preparo: [se necessário]
+"\nREGRA 3 - CID:" +
+"\nLeia o campo 'CID Principal' exatamente como escrito (ex: I64, R100, T07, M545, N835)." +
+"\nNao invente CIDs. Se ilegivel escreva [ilegivel]." +
 
-🩻 **EXAME ALTERNATIVO — 2ª LINHA** (se aplicável):
-**[Nome completo do exame]**
-- Indicação: [quando usar este em vez do anterior]
-- TUSS: [código] | SIGTAP: [código]
+"\nREGRA 4 - CAMPOS ILEGIVEIS:" +
+"\nSe nao conseguir ler claramente, escreva [ilegivel]. NUNCA invente ou suponha." +
+
+"\n\n=== FORMATO DA RESPOSTA ===" +
+
+"\nANALISE DO PEDIDO MEDICO" +
+
+"\n\nPEDIDO IDENTIFICADO (sem dados pessoais):" +
+"\nExame Solicitado: [nome EXATO do campo Nome do Procedimento]" +
+"\nCodigo SIGTAP: [codigo do campo Codigo Procedimento]" +
+"\nSexo: [sexo] | Idade: [idade se visivel]" +
+"\nCID Principal: [CID exato do campo CID Principal]" +
+"\nDiagnostico: [texto do campo Descricao do Diagnostico]" +
+"\nJustificativa: [texto do Resumo da Anamnese ou Justificativa, SEM nomes proprios]" +
+
+"\n\n---" +
+"\nAVALIACAO DE COERENCIA CLINICA" +
+"\n(Avalie com base em: ACR Appropriateness Criteria vigente, Diretrizes CBR, diretrizes nacionais de sociedades medicas, Resolucao CFM 2.228/2019 e tabela TUSS/ANS vigente)" +
+"\nSCORE: [0-100]" +
+"\nNIVEL: [ALTA|MODERADA|BAIXA]" +
+
+"\n\nPONTOS ADEQUADOS:" +
+"\n- [baseados no que foi lido]" +
+
+"\n\nPONTOS DE ATENCAO:" +
+"\n- [inconsistencias reais]" +
+
+"\n\nRECOMENDACAO: [orientacao ao auditor]" +
+
+"\n\nCODIGOS CORRETOS:" +
+"\nTUSS: [codigo] - [nome exame]" +
+"\nSIGTAP: [codigo]";
 
 [⚠️ Alertas de contraindicação se aplicável]
 
