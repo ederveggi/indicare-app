@@ -1,13 +1,99 @@
 /**
  * IndiCare — POST /api/sugestao-exames
  * Vercel Serverless Function · Node.js 20
+ * v2.0 — 2ª barreira de anonimização (LGPD / defesa em profundidade)
+ *
+ * Mudanças desta versão:
+ *  - Validação por DADOS CLÍNICOS (indicação), não por identidade do paciente.
+ *  - Sanitização de entrada: qualquer PII que chegue é descartada antes de
+ *    montar o prompt (nome, nascimento, CPF, CNS, carteira, convênio, etc.).
+ *  - Prompt enviado à Anthropic contém apenas idade e sexo — nunca identificadores.
+ *  - Idade lida do campo `idade` (a extensão já envia); fallback p/ nascimento.
+ *  - Referência "SBREIM" (entidade inexistente) substituída por CBR.
  */
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
+/* ════════════════════════════════════════════════════════════════
+ * 2ª BARREIRA — Sanitização de entrada (servidor)
+ * ════════════════════════════════════════════════════════════════ */
+
+// Mascara PII solta em texto livre (CPF, e-mail, telefone, CNS, datas, rótulos).
+function scrubTexto(texto) {
+  if (typeof texto !== 'string' || !texto) return '';
+  let t = texto;
+
+  // nascimento rotulado -> idade
+  t = t.replace(/(\b(?:data\s+de\s+nascimento|nascimento|dn|d\.n\.)\s*[:\-]\s*)(\d{2}\/\d{2}\/\d{4})/gi,
+    (full, pre, data) => {
+      const id = calcularIdade(data);
+      return id != null ? `Idade: ${id} anos` : `${pre}[DATA_NASCIMENTO]`;
+    });
+
+  // campos rotulados (específico -> genérico)
+  const rotulos = [
+    ['nome do paciente', '[PACIENTE]'], ['nome da mãe', '[NOME_MAE]'],
+    ['nome da mae', '[NOME_MAE]'], ['paciente', '[PACIENTE]'],
+    ['beneficiário', '[BENEFICIARIO]'], ['beneficiario', '[BENEFICIARIO]'],
+    ['carteirinha', '[CARTEIRINHA]'], ['carteira', '[CARTEIRINHA]'],
+    ['matrícula', '[MATRICULA]'], ['matricula', '[MATRICULA]'],
+    ['rg', '[RG]'], ['endereço', '[ENDERECO]'], ['endereco', '[ENDERECO]'],
+    ['nome', '[NOME]'],
+  ];
+  for (const [chave, rot] of rotulos) {
+    const esc = chave.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(\\b' + esc + '\\s*[:\\-]\\s*)(?!\\[)([^\\n\\r,.;]+)', 'gi');
+    t = t.replace(re, (full, pre) => pre + rot);
+  }
+
+  // padrões estruturados
+  const padroes = [
+    [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[EMAIL]'],
+    [/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '[CPF]'],
+    [/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '[CNPJ]'],
+    [/\b\d{3}\s?\d{4}\s?\d{4}\s?\d{4}\b/g, '[CARTAO_SUS]'],
+    [/(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?\d?\s?\d{4}[-\s]?\d{4}\b/g, '[TELEFONE]'],
+    [/\b\d{5}-?\d{3}\b/g, '[CEP]'],
+    [/\b\d{2}\/\d{2}\/\d{4}\b/g, '[DATA]'],
+  ];
+  for (const [re, rot] of padroes) t = t.replace(re, rot);
+
+  return t.replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+// Mantém SÓ idade e sexo. Converte nascimento->idade se necessário.
+function sanitizarPaciente(pac) {
+  pac = pac || {};
+  const out = {};
+  let idade = pac.idade;
+  if ((idade === undefined || idade === null || idade === '') && pac.nascimento) {
+    const c = calcularIdade(pac.nascimento);
+    if (c != null) idade = c;
+  }
+  if (idade !== undefined && idade !== null && idade !== '') {
+    const n = parseInt(String(idade).replace(/[^\d]/g, ''), 10);
+    if (!isNaN(n)) out.idade = n;
+  }
+  if (pac.sexo) out.sexo = String(pac.sexo).substring(0, 20);
+  return out;
+}
+
+// Remove PII de cada item do histórico.
+function sanitizarHistorico(historico) {
+  if (!Array.isArray(historico)) return [];
+  return historico.slice(0, 8).map(h => ({
+    data: (h && h.data) ? String(h.data).substring(0, 20) : '',
+    descricao: scrubTexto((h && (h.descricao || h.raw)) || ''),
+  }));
+}
+
+/* ════════════════════════════════════════════════════════════════
+ * Utilitários
+ * ════════════════════════════════════════════════════════════════ */
+
 function calcularIdade(nascimento) {
   if (!nascimento) return null;
-  const p = nascimento.split('/');
+  const p = String(nascimento).split('/');
   if (p.length !== 3) return null;
   const nasc = new Date(`${p[2]}-${p[1]}-${p[0]}`);
   if (isNaN(nasc)) return null;
@@ -15,6 +101,7 @@ function calcularIdade(nascimento) {
   let idade = hoje.getFullYear() - nasc.getFullYear();
   const m = hoje.getMonth() - nasc.getMonth();
   if (m < 0 || (m === 0 && hoje.getDate() < nasc.getDate())) idade--;
+  if (idade < 0 || idade > 130) return null;
   return idade;
 }
 
@@ -42,40 +129,37 @@ function normalizar(s) {
   };
 }
 
-function montarPrompt(paciente, solicitante, contexto, indicacaoClinica, historico) {
-  const idade  = calcularIdade(paciente.nascimento);
-  const perfil = idade != null
+/* ════════════════════════════════════════════════════════════════
+ * Prompt — SEM identificadores do paciente
+ * ════════════════════════════════════════════════════════════════ */
+
+function montarPrompt(paciente, contexto, indicacaoClinica, historico) {
+  const idade = paciente.idade;
+  const perfil = (idade != null && !isNaN(idade))
     ? `${idade} anos${idade >= 75 ? ' — Idoso >75a' : idade < 18 ? ' — Pediátrico' : ''}`
     : 'Não informada';
+  const linhaSexo = paciente.sexo ? `\n- Sexo: ${paciente.sexo}` : '';
 
   const secaoIndicacao = indicacaoClinica
     ? `\nINDICAÇÃO CLÍNICA DO MÉDICO:\n"${indicacaoClinica}"\n` : '';
 
-  const secaoHistorico = historico?.length > 0
+  const secaoHistorico = (historico && historico.length > 0)
     ? `\nHISTÓRICO (${historico.length} atendimentos):\n` +
-      historico.slice(0, 8).map(h => `- ${h.data||''}: ${h.descricao||h.raw||''}`).join('\n') + '\n'
+      historico.map(h => `- ${h.data || ''}: ${h.descricao || ''}`).join('\n') + '\n'
     : '';
 
   return `SOLICITAÇÃO DE PROPEDÊUTICA — UNIMED CUIABÁ (ANS 34.208-4)
 
-PACIENTE:
-- Nome: ${paciente.nome || 'Não informado'}
-- Idade: ${perfil}
-- Nascimento: ${paciente.nascimento || 'Não informado'}
-- CNS: ${paciente.cns || 'Não informado'}
-- Carteira: ${paciente.carteira || paciente.usuario || 'Não informado'}
-
-SOLICITANTE:
-- Médico: ${solicitante?.nome || 'Não informado'}
-- Código: ${solicitante?.codigo || 'Não informado'}
+PACIENTE (dados clínicos minimizados — sem identificação):
+- Idade: ${perfil}${linhaSexo}
 ${secaoIndicacao}${secaoHistorico}
-Sugira os exames de imagem mais indicados segundo ACR, SBREIM e CFM.
+Sugira os exames de imagem mais indicados segundo ACR, CBR e CFM.
 Ordene por prioridade clínica (1 = mais urgente/importante).
 Responda SOMENTE com o JSON conforme o schema definido.`;
 }
 
 const SYSTEM_PROMPT = `Você é o IndiCare, assistente de propedêutica diagnóstica de imagem para médicos brasileiros.
-Base: ACR Appropriateness Criteria, SBREIM, CFM Res. 2.228/2019, tabela TUSS/ANS vigente.
+Base: ACR Appropriateness Criteria, diretrizes do CBR (Colégio Brasileiro de Radiologia), CFM Res. 2.228/2019, tabela TUSS/ANS vigente.
 
 SISTEMA: Unimed Cuiabá usa o sistema MV com PREFIXOS ABREVIADOS nas descrições.
 SEMPRE use estes prefixos EXATOS no campo "descricao" (é assim que o sistema busca):
@@ -129,7 +213,7 @@ SCHEMA (JSON exato):
       "codigoTUSS": "40901416",
       "descricao": "DOPPLER COLORIDO DE ARTERIAS VISCERAIS MESOENTERICAS",
       "justificativa": "Por que é primeira linha (máx 100 chars)",
-      "protocolo": "ACR AC 9, SBREIM 2023"
+      "protocolo": "ACR AC 9, CBR 2023"
     }
   ],
   "observacoes": "Alertas clínicos para o auditor médico"
@@ -145,9 +229,17 @@ export default async function handler(req, res) {
   const API_KEY = process.env.ANTHROPIC_API_KEY;
   if (!API_KEY) return res.status(500).json({ error: 'API Key não configurada.' });
 
-  const { paciente, solicitante, contexto, indicacaoClinica, historico } = req.body || {};
-  if (!paciente || (!paciente.nome && !paciente.cpf && !paciente.carteira)) {
-    return res.status(400).json({ error: 'Dados do paciente obrigatórios.' });
+  const body = req.body || {};
+
+  // ── 2ª BARREIRA: sanitiza TUDO que chega antes de qualquer uso ──
+  const paciente        = sanitizarPaciente(body.paciente);
+  const indicacaoClinica = scrubTexto(body.indicacaoClinica || '');
+  const historico       = sanitizarHistorico(body.historico);
+  const contexto        = { sistema: (body.contexto && body.contexto.sistema) || 'unimed-cuiaba' };
+
+  // ── Validação por DADO CLÍNICO (não por identidade) ──
+  if (!indicacaoClinica || indicacaoClinica.trim().length < 5) {
+    return res.status(400).json({ error: 'Indicação clínica obrigatória (mínimo 5 caracteres).' });
   }
 
   try {
@@ -159,10 +251,10 @@ export default async function handler(req, res) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: montarPrompt(paciente, solicitante, contexto, indicacaoClinica, historico) }],
+        messages: [{ role: 'user', content: montarPrompt(paciente, contexto, indicacaoClinica, historico) }],
       }),
     });
 
