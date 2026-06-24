@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Política de Privacidade — IndiCare</title>
+<style>
+  :root{ --blue:#0369A1; --dark:#0F1525; --gray:#555; --bg:#f7f9fc; }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif; color:var(--dark);
+        background:var(--bg); line-height:1.7; padding:0 0 60px; }
+  header{ background:linear-gradient(135deg,#0369A1,#0DBCB4); color:#fff; padding:40px 20px; text-align:center; }
+  header h1{ font-size:28px; margin-bottom:6px; }
+  header p{ opacity:.92; font-size:15px; }
+  main{ max-width:820px; margin:-24px auto 0; background:#fff; border-radius:14px;
+        box-shadow:0 8px 30px rgba(0,0,0,.08); padding:36px 32px; }
+  h2{ color:var(--blue); font-size:19px; margin:28px 0 10px; padding-bottom:6px; border-bottom:2px solid #e6eef5; }
+  h2:first-of-type{ margin-top:0; }
+  p,li{ font-size:15px; color:#333; margin-bottom:10px; }
+  ul{ padding-left:22px; }
+  .meta{ font-size:13px; color:var(--gray); margin-top:8px; }
+  .box{ background:#eef6fb; border-left:4px solid var(--blue); padding:14px 16px; border-radius:8px; margin:14px 0; font-size:14px; }
+  .box.warn{ background:#fff7ec; border-left-color:#F0A020; }
+  strong{ color:var(--dark); }
+  footer{ max-width:820px; margin:24px auto 0; text-align:center; color:var(--gray); font-size:13px; padding:0 20px; }
+  a{ color:var(--blue); }
+  table{ width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+  th,td{ border:1px solid #dde6ef; padding:9px 11px; text-align:left; }
+  th{ background:#eef6fb; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Política de Privacidade — IndiCare</h1>
+  <p>Extensão de navegador e plataforma de apoio à decisão clínica em imagem</p>
+</header>
+
+<main>
+  <p class="meta">Última atualização: junho de 2026 · Versão 1.0</p>
+  <p class="meta">Controladora: <strong>Indicare Tecnologia em Saúde Ltda.</strong> · indicaresaude.com.br · eder.veggi@indicaresaude.com.br</p>
+
+  <div class="box">
+    <strong>Resumo:</strong> a extensão IndiCare auxilia profissionais de saúde a sugerir e validar exames de imagem.
+    Os dados que identificam o paciente (nome, CPF, Cartão Nacional de Saúde, carteirinha, data de nascimento)
+    são <strong>removidos no próprio navegador antes de qualquer envio</strong>. O IndiCare <strong>não mantém banco de dados
+    de prontuários</strong> e <strong>não vende nem compartilha dados</strong> com terceiros para publicidade.
+  </div>
+
+  <h2>1. Quem somos</h2>
+  <p>O IndiCare é um produto da Indicare Tecnologia em Saúde Ltda., destinado a profissionais de saúde.
+  A extensão lê dados clínicos exibidos no sistema de gestão hospitalar autorizado e consulta um serviço de
+  inteligência artificial para sugerir e validar exames de imagem, com base em protocolos clínicos de referência.</p>
+
+  <h2>2. Quais dados a extensão acessa</h2>
+  <p>Para cumprir sua função, a extensão lê, na página do sistema autorizado, os dados clínicos necessários:</p>
+  <table>
+    <tr><th>Dado</th><th>Uso</th><th>É enviado ao servidor/IA?</th></tr>
+    <tr><td>Idade e sexo</td><td>Análise clínica</td><td>Sim (dado clínico, não identifica)</td></tr>
+    <tr><td>Indicação / quadro clínico</td><td>Base da sugestão</td><td>Sim (dado clínico)</td></tr>
+    <tr><td>Nome do paciente</td><td>Exibição local ao profissional</td><td><strong>Não — removido antes do envio</strong></td></tr>
+    <tr><td>CPF, CNS, carteirinha</td><td>—</td><td><strong>Não — removido antes do envio</strong></td></tr>
+    <tr><td>Data de nascimento</td><td>Convertida em idade</td><td><strong>Não — só a idade é usada</strong></td></tr>
+    <tr><td>Nº de atendimento / guia</td><td>—</td><td><strong>Não — removido antes do envio</strong></td></tr>
+  </table>
+
+  <h2>3. Como protegemos os dados (anonimização)</h2>
+  <p>O IndiCare adota o princípio da minimização de dados, com duas camadas independentes de proteção:</p>
+  <ul>
+    <li><strong>No navegador (antes do envio):</strong> os identificadores diretos do paciente são removidos e a
+    data de nascimento é convertida em idade. Identificadores em texto livre (CPF, e-mail, telefone) são mascarados.</li>
+    <li><strong>No servidor:</strong> uma segunda verificação descarta qualquer dado identificável que porventura chegue,
+    antes de compor a solicitação à inteligência artificial.</li>
+  </ul>
+  <p>Como resultado, o conteúdo efetivamente processado pela IA contém <strong>apenas idade, sexo e o quadro clínico</strong>.</p>
+
+  <h2>4. Onde os dados são processados</h2>
+  <p>O processamento por inteligência artificial é realizado pela <strong>Anthropic, PBC</strong> (modelo Claude), via API comercial,
+  em infraestrutura de nuvem localizada majoritariamente fora do Brasil — o que caracteriza transferência internacional de dados,
+  realizada em conformidade com a LGPD. Pela política comercial da API, os dados <strong>não são utilizados para treinamento de modelos</strong>
+  e têm retenção mínima. O backend do IndiCare é hospedado na plataforma Vercel e atua como intermediário, <strong>sem armazenar prontuários</strong>.</p>
+
+  <h2>5. Armazenamento e retenção</h2>
+  <p>O IndiCare <strong>não mantém banco de dados de prontuários de pacientes</strong>. Dados eventualmente exibidos permanecem no
+  dispositivo do profissional durante o uso. A extensão pode usar o armazenamento local do navegador apenas para preferências de
+  funcionamento, sem conter dados pessoais de pacientes.</p>
+
+  <h2>6. Compartilhamento</h2>
+  <p>O IndiCare <strong>não vende, não aluga e não compartilha</strong> dados com terceiros para fins de publicidade ou marketing.
+  O único compartilhamento é o envio de dados clínicos anonimizados ao provedor de IA (Anthropic), estritamente para gerar a
+  análise solicitada pelo profissional.</p>
+
+  <h2>7. Base legal e finalidade (LGPD)</h2>
+  <p>O tratamento observa os princípios da finalidade, necessidade e segurança da Lei nº 13.709/2018 (LGPD). Os dados são tratados
+  exclusivamente para apoio à decisão clínica em exames de imagem. O IndiCare é uma ferramenta de apoio; a decisão final é sempre
+  do profissional de saúde responsável.</p>
+
+  <h2>8. Permissões da extensão</h2>
+  <ul>
+    <li><strong>activeTab / scripting:</strong> ler os dados clínicos da página do sistema autorizado e exibir a interface de sugestão.</li>
+    <li><strong>storage:</strong> guardar preferências locais de funcionamento.</li>
+    <li><strong>Acesso a sites específicos:</strong> a extensão funciona apenas no sistema de saúde autorizado e no domínio do IndiCare.</li>
+  </ul>
+
+  <h2>9. Direitos do titular</h2>
+  <p>Como o IndiCare não armazena dados de pacientes, eventuais solicitações relativas a registros de prontuário devem ser dirigidas
+  à instituição de saúde controladora dos dados. Para dúvidas sobre esta política ou sobre o funcionamento da extensão, contate-nos.</p>
+
+  <div class="box warn">
+    <strong>Limitação técnica (transparência):</strong> quando o profissional opta por enviar uma <em>captura de imagem</em> do pedido,
+    a imagem pode conter dados visíveis. Nesses casos, a IA é instruída a não extrair nem retornar identificadores, mas a imagem em si
+    é transmitida. Recomenda-se enviar apenas telas com as informações clínicas necessárias.
+  </div>
+
+  <h2>10. Contato</h2>
+  <p>Indicare Tecnologia em Saúde Ltda.<br>
+  E-mail: <a href="mailto:eder.veggi@indicaresaude.com.br">eder.veggi@indicaresaude.com.br</a><br>
+  Site: <a href="https://indicaresaude.com.br">indicaresaude.com.br</a></p>
+</main>
+
+<footer>
+  © 2026 Indicare Tecnologia em Saúde Ltda. — Todos os direitos reservados.
+</footer>
+</body>
+</html>
